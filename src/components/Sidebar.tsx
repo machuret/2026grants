@@ -12,11 +12,11 @@ import {
   Building2,
   LogOut,
   Download,
-  Shield,
   Search,
   Sparkles,
   Database,
   Users,
+  Link2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -39,6 +39,7 @@ const settingsNav: NavItem[] = [
 ];
 
 const adminNav: NavItem[] = [
+  { href: "/admin/sources", label: "Grant Sources", icon: Link2 },
   { href: "/admin/scraper", label: "Grant Scraper", icon: Search },
   { href: "/admin/grants", label: "Manage Grants", icon: Sparkles },
   { href: "/admin", label: "User Management", icon: Users },
