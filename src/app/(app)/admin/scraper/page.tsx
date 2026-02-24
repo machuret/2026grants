@@ -127,7 +127,7 @@ export default function ScraperPage() {
     <div className="mx-auto max-w-3xl">
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900">Grant Scraper</h1>
-        <p className="mt-1 text-gray-500">Find real grant opportunities using AI web search — Admin only</p>
+        <p className="mt-1 text-gray-500">Crawls real government grant sites using Apify, then extracts structured grant data with OpenAI — Admin only</p>
       </div>
 
       {/* Search Parameters */}
@@ -166,10 +166,14 @@ export default function ScraperPage() {
             </div>
           </div>
 
+          <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700">
+            <span className="font-semibold">How it works:</span> Apify crawls the official grant listing sites for the selected country (depth 1, up to 30 pages), then OpenAI extracts structured grant data from the crawled content. This takes <span className="font-semibold">60–120 seconds</span>.
+          </div>
+
           <button onClick={handlePreview} disabled={scraping}
-            className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-5 py-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
-            {scraping ? <><Loader2 className="h-4 w-4 animate-spin" /> Searching… this may take 30-60 seconds</>
-              : <><Search className="h-4 w-4" /> Preview Grants</>}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-5 py-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
+            {scraping ? <><Loader2 className="h-4 w-4 animate-spin" /> Crawling grant sites… this may take 1–2 minutes</>
+              : <><Search className="h-4 w-4" /> Crawl &amp; Preview Grants</>}
           </button>
         </div>
       )}
