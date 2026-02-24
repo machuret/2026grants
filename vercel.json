@@ -1,0 +1,20 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "next build",
+  "devCommand": "next dev",
+  "installCommand": "npm install",
+  "functions": {
+    "src/app/api/admin/enricher/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/admin/scraper/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/grants/write/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/grants/search/route.ts": {
+      "maxDuration": 30
+    }
+  }
+}
