@@ -17,6 +17,8 @@ import {
   Database,
   Users,
   Link2,
+  FolderCheck,
+  ClipboardList,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -36,6 +38,8 @@ const grantsNav: NavItem[] = [
 
 const settingsNav: NavItem[] = [
   { href: "/company", label: "Company Info", icon: Building2 },
+  { href: "/company/profile", label: "Org Profile", icon: ClipboardList },
+  { href: "/company/documents", label: "Documents", icon: FolderCheck },
 ];
 
 const adminNav: NavItem[] = [
