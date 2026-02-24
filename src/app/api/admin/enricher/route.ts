@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdminAuth, handleApiError } from "@/lib/apiHelpers";
 import { generateSlug } from "@/lib/slugify";
+import { computeMatchesForAllCompanies, markMatchesStale } from "@/lib/matchEngine";
 
 // POST /api/admin/enricher — enrich a single grant with AI (crawl URL + GPT)
 export async function POST(req: NextRequest) {
@@ -139,6 +140,9 @@ Return ONLY the JSON object.`;
       .single();
 
     if (error) throw new Error(error.message);
+
+    // Auto-trigger matching for all companies (fire-and-forget)
+    markMatchesStale(grantId).then(() => computeMatchesForAllCompanies(grantId)).catch(() => {});
 
     return NextResponse.json({ success: true, grant: updated });
   } catch (err) {

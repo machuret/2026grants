@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdminAuth, handleApiError } from "@/lib/apiHelpers";
 import { generateSlug } from "@/lib/slugify";
+import { computeMatchesForAllCompanies, markMatchesStale } from "@/lib/matchEngine";
 
 // PATCH /api/admin/grants/[id] — update a public grant (SEO, slug, publish, etc.)
 export async function PATCH(
@@ -46,6 +47,13 @@ export async function PATCH(
       .single();
 
     if (error) throw new Error(error.message);
+
+    // Auto-trigger matching when grant is published or becomes open/enriched
+    const triggerMatch = body.published === true || ["open", "enriched", "closing_soon"].includes(body.status ?? "");
+    if (triggerMatch) {
+      markMatchesStale(id).then(() => computeMatchesForAllCompanies(id)).catch(() => {});
+    }
+
     return NextResponse.json({ success: true, grant: data });
   } catch (err) {
     return handleApiError(err, "Admin Grant PATCH");

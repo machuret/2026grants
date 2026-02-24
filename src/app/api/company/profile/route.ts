@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAuth, handleApiError } from "@/lib/apiHelpers";
 import { getCompanyId } from "@/lib/getCompanyId";
+import { computeMatchesForCompany } from "@/lib/matchEngine";
 
 export async function GET() {
   try {
@@ -47,6 +48,10 @@ export async function PUT(req: NextRequest) {
     }
 
     if (error) throw new Error(error.message);
+
+    // Auto-trigger re-matching for this company (fire-and-forget)
+    computeMatchesForCompany(companyId).catch(() => {});
+
     return NextResponse.json({ success: true, profile: data });
   } catch (err) {
     return handleApiError(err, "CompanyProfile PUT");

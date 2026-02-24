@@ -18,7 +18,6 @@ import {
   Users,
   Link2,
   FolderCheck,
-  ClipboardList,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -33,12 +32,11 @@ const grantsNav: NavItem[] = [
   { href: "/grants", label: "My Grants", icon: Trophy },
   { href: "/grants/crm", label: "Grants CRM", icon: KanbanSquare },
   { href: "/grants/builder", label: "Grant Builder", icon: PenLine },
-  { href: "/grants/profile", label: "Grant Profile", icon: UserCheck },
+  { href: "/grants/profile", label: "Organisation Profile", icon: UserCheck },
 ];
 
 const settingsNav: NavItem[] = [
   { href: "/company", label: "Company Info", icon: Building2 },
-  { href: "/company/profile", label: "Org Profile", icon: ClipboardList },
   { href: "/company/documents", label: "Documents", icon: FolderCheck },
 ];
 
