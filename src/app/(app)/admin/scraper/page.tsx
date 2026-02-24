@@ -20,6 +20,11 @@ interface PreviewResult {
   title: string;
   url: string;
   description: string;
+  amount?: string;
+  deadline?: string;
+  eligibility?: string;
+  country?: string;
+  industry?: string;
   alreadyExists: boolean;
 }
 
@@ -122,7 +127,7 @@ export default function ScraperPage() {
     <div className="mx-auto max-w-3xl">
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900">Grant Scraper</h1>
-        <p className="mt-1 text-gray-500">Scrape grant opportunities from the web using Apify — Admin only</p>
+        <p className="mt-1 text-gray-500">Find real grant opportunities using AI web search — Admin only</p>
       </div>
 
       {/* Search Parameters */}
@@ -238,6 +243,17 @@ export default function ScraperPage() {
                       </div>
                     </div>
                     {result.description && <p className="mt-1 text-xs text-gray-500 line-clamp-2">{result.description}</p>}
+                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                      {result.amount && result.amount !== "Not specified" && (
+                        <span className="text-[10px] text-green-700 font-medium">💰 {result.amount}</span>
+                      )}
+                      {result.deadline && result.deadline !== "Not specified" && (
+                        <span className="text-[10px] text-orange-600 font-medium">📅 {result.deadline}</span>
+                      )}
+                      {result.eligibility && (
+                        <span className="text-[10px] text-blue-600">👤 {result.eligibility}</span>
+                      )}
+                    </div>
                     <p className="mt-1 text-[10px] text-gray-400 truncate">{result.url}</p>
                   </div>
                 </div>

@@ -3,7 +3,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdminAuth, handleApiError } from "@/lib/apiHelpers";
 
-// POST /api/admin/sources/[id]/scrape — scrape grants from a learned source via Apify
+interface GrantResult {
+  title: string;
+  url: string;
+  description: string;
+  amount?: string;
+  deadline?: string;
+  eligibility?: string;
+  country?: string;
+  industry?: string;
+}
+
+// POST /api/admin/sources/[id]/scrape — use OpenAI web search to find actual grants from this source
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -13,8 +24,8 @@ export async function POST(
     const { response: authError } = await requireAdminAuth();
     if (authError) return authError;
 
-    const apiKey = process.env.APIFY_API_KEY;
-    if (!apiKey) return NextResponse.json({ error: "Apify API key not configured" }, { status: 500 });
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 500 });
 
     const { maxResults = 20 } = await req.json().catch(() => ({}));
 
@@ -35,67 +46,71 @@ export async function POST(
 
     const ss = source.siteStructure as {
       grantListUrl?: string;
-      paginationPattern?: string;
-      grantLinkPattern?: string;
       scrapingStrategy?: string;
+      keyFields?: string[];
     } | null;
 
-    // Build the target URL — prefer the learned grant list URL
     const targetUrl = ss?.grantListUrl || source.grantListUrl || source.url;
+    const industryClause = source.industry ? `${source.industry} ` : "";
+    const countryClause = source.country ? ` in ${source.country}` : "";
+    const year = new Date().getFullYear();
 
-    // Build a focused search query using the site's domain + grant terms
-    const domain = new URL(source.url).hostname.replace("www.", "");
-    const searchQuery = `site:${domain} ${source.industry ? source.industry + " " : ""}grants funding ${source.country || ""}`.trim();
+    const prompt = `Go to ${targetUrl} and find up to ${maxResults} individual grant opportunities listed on that website.
 
-    // Run Apify Google Search Scraper focused on this domain
-    const runRes = await fetch(
-      "https://api.apify.com/v2/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=" + apiKey,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          queries: searchQuery,
-          maxPagesPerQuery: 3,
-          resultsPerPage: Math.min(maxResults, 50),
-          languageCode: "",
-          mobileResults: false,
-          includeUnfilteredResults: false,
-        }),
-      }
-    );
+This is the official website for: ${source.name}${source.description ? ` — ${source.description}` : ""}.
+${ss?.scrapingStrategy ? `Site structure note: ${ss.scrapingStrategy}` : ""}
 
-    if (!runRes.ok) {
-      const errText = await runRes.text();
-      return NextResponse.json({ error: `Apify error (${runRes.status}): ${errText.slice(0, 200)}` }, { status: 502 });
+For each grant found, return a JSON array. Each item must have:
+- title: the full official grant name
+- url: the direct URL to that specific grant's page on ${new URL(source.url).hostname} (not the listing page itself)
+- description: 2-3 sentence summary of what the grant funds
+- amount: funding amount or range (e.g. "Up to $50,000") — use "Not specified" if unknown
+- deadline: closing date if shown — use "Ongoing" or "Not specified" if unknown
+- eligibility: who can apply (brief)
+- country: "${source.country || "Not specified"}"
+- industry: "${source.industry || industryClause.trim() || "Various"}"
+
+Return ONLY a valid JSON array. No markdown. No commentary. Only return grants that are actual funding opportunities${countryClause} for ${year} or later.`;
+
+    const aiRes = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${openaiKey}` },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        tools: [{ type: "web_search_preview" }],
+        input: prompt,
+      }),
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      return NextResponse.json({ error: `OpenAI error (${aiRes.status}): ${errText.slice(0, 300)}` }, { status: 502 });
     }
 
-    const results = await runRes.json();
+    const aiData = await aiRes.json();
 
-    // Extract organic results
-    const organicResults = Array.isArray(results)
-      ? results.flatMap((page: { organicResults?: Array<{ title?: string; url?: string; description?: string }> }) =>
-          (page.organicResults ?? []).map((r) => ({
-            title: r.title ?? "",
-            url: r.url ?? "",
-            description: r.description ?? "",
-          }))
-        )
-      : [];
+    // Extract text from Responses API output
+    const textContent = (aiData.output ?? [])
+      .flatMap((item: { type: string; content?: Array<{ type: string; text?: string }> }) =>
+        item.type === "message" ? (item.content ?? []) : []
+      )
+      .filter((c: { type: string }) => c.type === "output_text")
+      .map((c: { text?: string }) => c.text ?? "")
+      .join("");
 
-    // Filter to only URLs from this source's domain + deduplicate
-    const seen = new Set<string>();
-    const filtered = organicResults.filter((r) => {
-      if (!r.title || !r.url || seen.has(r.url)) return false;
-      try {
-        const urlDomain = new URL(r.url).hostname.replace("www.", "");
-        if (!urlDomain.includes(domain) && !domain.includes(urlDomain)) return false;
-      } catch { return false; }
-      seen.add(r.url);
-      return true;
-    }).slice(0, maxResults);
+    let grants: GrantResult[] = [];
+    try {
+      const cleaned = textContent.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      grants = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return NextResponse.json({ error: "Failed to parse AI response", raw: textContent.slice(0, 500) }, { status: 502 });
+    }
 
-    // Mark which already exist
-    const urls = filtered.map((r) => r.url);
+    grants = grants.filter((g) => g.title && g.url).slice(0, maxResults);
+
+    // Mark which already exist in DB
+    const urls = grants.map((g) => g.url);
     const { data: existing } = await db.from("PublicGrant").select("url").in("url", urls);
     const existingUrls = new Set((existing ?? []).map((r: { url: string }) => r.url));
 
@@ -104,8 +119,7 @@ export async function POST(
       sourceId: id,
       sourceName: source.name,
       targetUrl,
-      searchQuery,
-      results: filtered.map((r) => ({ ...r, alreadyExists: existingUrls.has(r.url) })),
+      results: grants.map((g) => ({ ...g, alreadyExists: existingUrls.has(g.url) })),
     });
   } catch (err) {
     return handleApiError(err, "Source Scrape");

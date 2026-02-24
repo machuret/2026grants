@@ -3,6 +3,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdminAuth, handleApiError } from "@/lib/apiHelpers";
 
+interface GrantResult {
+  title: string;
+  url: string;
+  description: string;
+  amount?: string;
+  deadline?: string;
+  eligibility?: string;
+  country?: string;
+  industry?: string;
+}
+
 // PUT /api/admin/scraper — commit selected previewed results to DB
 export async function PUT(req: NextRequest) {
   try {
@@ -12,7 +23,7 @@ export async function PUT(req: NextRequest) {
     const { country, industry, results } = await req.json() as {
       country: string;
       industry?: string;
-      results: Array<{ title: string; url: string; description: string }>;
+      results: GrantResult[];
     };
 
     if (!Array.isArray(results) || results.length === 0) {
@@ -28,8 +39,8 @@ export async function PUT(req: NextRequest) {
         url: result.url,
         description: result.description,
         sourceUrl: result.url,
-        country,
-        industry: industry || null,
+        country: result.country || country,
+        industry: result.industry || industry || null,
         status: "scraped",
         enriched: false,
         scrapedRaw: result,
@@ -43,108 +54,100 @@ export async function PUT(req: NextRequest) {
   }
 }
 
-// POST /api/admin/scraper — scrape grants via Apify by country + industry
+// POST /api/admin/scraper — use OpenAI web search to find actual grant opportunities
 export async function POST(req: NextRequest) {
   try {
-    const { appUser, response: authError } = await requireAdminAuth();
+    const { response: authError } = await requireAdminAuth();
     if (authError) return authError;
 
-    const apiKey = process.env.APIFY_API_KEY;
-    if (!apiKey) return NextResponse.json({ error: "Apify API key not configured" }, { status: 500 });
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) return NextResponse.json({ error: "OpenAI API key not configured" }, { status: 500 });
 
     const { country, industry, maxResults = 20, preview = false } = await req.json();
     if (!country) return NextResponse.json({ error: "country is required" }, { status: 400 });
 
-    // Use Apify Google Search Scraper to find grants
-    const searchQuery = `${industry ? industry + " " : ""}grants funding opportunities ${country} ${new Date().getFullYear()}`;
+    const year = new Date().getFullYear();
+    const industryClause = industry ? `${industry} ` : "";
+    const prompt = `Search the web and find ${maxResults} currently open or upcoming government and foundation grant opportunities for ${industryClause}organisations in ${country} in ${year}.
 
-    const runRes = await fetch("https://api.apify.com/v2/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=" + apiKey, {
+For each grant return a JSON array. Each item must have:
+- title: full official grant name
+- url: direct link to the grant page (not a search result, not a homepage)
+- description: 2-3 sentence summary of what the grant funds
+- amount: funding amount or range if known (e.g. "Up to $50,000" or "$10k-$500k")
+- deadline: closing date if known
+- eligibility: who can apply (brief)
+- country: "${country}"
+- industry: the primary sector
+
+Return ONLY a valid JSON array, no markdown, no extra text. Find real grants with real URLs.`;
+
+    const aiRes = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${openaiKey}` },
       body: JSON.stringify({
-        queries: searchQuery,
-        maxPagesPerQuery: 2,
-        resultsPerPage: Math.min(maxResults, 50),
-        languageCode: "",
-        mobileResults: false,
-        includeUnfilteredResults: false,
+        model: "gpt-4o",
+        tools: [{ type: "web_search_preview" }],
+        input: prompt,
       }),
     });
 
-    if (!runRes.ok) {
-      const errText = await runRes.text();
-      return NextResponse.json({ error: `Apify error (${runRes.status}): ${errText.slice(0, 200)}` }, { status: 502 });
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      return NextResponse.json({ error: `OpenAI error (${aiRes.status}): ${errText.slice(0, 300)}` }, { status: 502 });
     }
 
-    const results = await runRes.json();
+    const aiData = await aiRes.json();
 
-    // Extract organic results from Apify response
-    const organicResults = Array.isArray(results)
-      ? results.flatMap((page: { organicResults?: Array<{ title?: string; url?: string; description?: string }> }) =>
-          (page.organicResults ?? []).map((r) => ({
-            title: r.title ?? "",
-            url: r.url ?? "",
-            description: r.description ?? "",
-          }))
-        )
-      : [];
+    // Extract text content from Responses API output array
+    const textContent = (aiData.output ?? [])
+      .flatMap((item: { type: string; content?: Array<{ type: string; text?: string }> }) =>
+        item.type === "message" ? (item.content ?? []) : []
+      )
+      .filter((c: { type: string }) => c.type === "output_text")
+      .map((c: { text?: string }) => c.text ?? "")
+      .join("");
 
-    // Filter out irrelevant results and deduplicate by URL
-    const seen = new Set<string>();
-    const filtered = organicResults.filter((r) => {
-      if (!r.title || !r.url || seen.has(r.url)) return false;
-      seen.add(r.url);
-      return true;
-    }).slice(0, maxResults);
+    let grants: GrantResult[] = [];
+    try {
+      const cleaned = textContent.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      grants = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return NextResponse.json({ error: "Failed to parse AI response as JSON", raw: textContent.slice(0, 500) }, { status: 502 });
+    }
 
-    // Preview mode: return results without saving
+    grants = grants.filter((g) => g.title && g.url).slice(0, maxResults);
+
+    // Mark which already exist in DB
+    const urls = grants.map((g) => g.url);
+    const { data: existing } = await db.from("PublicGrant").select("url").in("url", urls);
+    const existingUrls = new Set((existing ?? []).map((r: { url: string }) => r.url));
+    const withExists = grants.map((g) => ({ ...g, alreadyExists: existingUrls.has(g.url) }));
+
     if (preview) {
-      // Mark which URLs already exist in DB
-      const urls = filtered.map((r) => r.url);
-      const { data: existing } = await db.from("PublicGrant").select("url").in("url", urls);
-      const existingUrls = new Set((existing ?? []).map((r: { url: string }) => r.url));
-      return NextResponse.json({
-        success: true,
-        preview: true,
-        query: searchQuery,
-        results: filtered.map((r) => ({ ...r, alreadyExists: existingUrls.has(r.url) })),
-      });
+      return NextResponse.json({ success: true, preview: true, query: prompt.split("\n")[0], results: withExists });
     }
 
-    // Save to PublicGrant table as 'scraped' status
     let inserted = 0;
-    for (const result of filtered) {
-      // Skip if URL already exists
-      const { data: existing } = await db
-        .from("PublicGrant")
-        .select("id")
-        .eq("url", result.url)
-        .maybeSingle();
-
-      if (existing) continue;
-
+    for (const grant of grants) {
+      const { data: dup } = await db.from("PublicGrant").select("id").eq("url", grant.url).maybeSingle();
+      if (dup) continue;
       const { error } = await db.from("PublicGrant").insert({
-        name: result.title,
-        url: result.url,
-        description: result.description,
-        sourceUrl: result.url,
-        country,
-        industry: industry || null,
+        name: grant.title,
+        url: grant.url,
+        description: grant.description,
+        sourceUrl: grant.url,
+        country: grant.country || country,
+        industry: grant.industry || industry || null,
         status: "scraped",
         enriched: false,
-        scrapedRaw: result,
+        scrapedRaw: grant,
       });
-
       if (!error) inserted++;
     }
 
-    return NextResponse.json({
-      success: true,
-      query: searchQuery,
-      found: filtered.length,
-      inserted,
-      skippedDuplicates: filtered.length - inserted,
-    });
+    return NextResponse.json({ success: true, found: grants.length, inserted, skippedDuplicates: grants.length - inserted });
   } catch (err) {
     return handleApiError(err, "Admin Scraper");
   }
