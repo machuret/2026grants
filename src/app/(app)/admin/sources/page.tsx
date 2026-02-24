@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import {
   Loader2, Plus, Trash2, Globe, Brain, CheckCircle,
-  Clock, AlertCircle, ExternalLink, ChevronDown, ChevronUp, RefreshCw
+  Clock, AlertCircle, ExternalLink, ChevronDown, ChevronUp, RefreshCw,
+  Search, DollarSign, X,
 } from "lucide-react";
 import { authFetch } from "@/lib/authFetch";
 
@@ -40,6 +41,15 @@ export default function AdminSourcesPage() {
   const [sources, setSources] = useState<GrantSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [crawling, setCrawling] = useState<string | null>(null);
+  const [scraping, setScraping] = useState<string | null>(null);
+  const [committing, setCommitting] = useState<string | null>(null);
+  // scrapeState: per-source preview panel state
+  const [scrapePanel, setScrapePanel] = useState<Record<string, {
+    results: Array<{ title: string; url: string; description: string; alreadyExists: boolean }>;
+    selected: Set<number>;
+    searchQuery: string;
+    committed: { inserted: number; skipped: number } | null;
+  }>>({});
   const [deleting, setDeleting] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showAdd, setShowAdd] = useState(false);
@@ -122,6 +132,88 @@ export default function AdminSourcesPage() {
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
+  };
+
+  const scrapeSource = async (id: string) => {
+    setScraping(id);
+    setMsg(null);
+    setScrapePanel((prev) => ({ ...prev, [id]: { results: [], selected: new Set(), searchQuery: "", committed: null } }));
+    try {
+      const res = await authFetch(`/api/admin/sources/${id}/scrape`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maxResults: 30 }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const preSelected = new Set<number>(
+          data.results.map((_: unknown, i: number) => i).filter((i: number) => !data.results[i].alreadyExists)
+        );
+        setScrapePanel((prev) => ({
+          ...prev,
+          [id]: { results: data.results, selected: preSelected, searchQuery: data.searchQuery, committed: null },
+        }));
+      } else {
+        setMsg({ type: "err", text: data.error || "Scrape failed" });
+        setScrapePanel((prev) => { const n = { ...prev }; delete n[id]; return n; });
+      }
+    } catch {
+      setMsg({ type: "err", text: "Network error" });
+      setScrapePanel((prev) => { const n = { ...prev }; delete n[id]; return n; });
+    } finally {
+      setScraping(null);
+    }
+  };
+
+  const toggleScrapeSelect = (id: string, i: number) => {
+    setScrapePanel((prev) => {
+      const panel = prev[id];
+      if (!panel) return prev;
+      const sel = new Set(panel.selected);
+      if (sel.has(i)) sel.delete(i); else sel.add(i);
+      return { ...prev, [id]: { ...panel, selected: sel } };
+    });
+  };
+
+  const toggleScrapeSelectAll = (id: string) => {
+    setScrapePanel((prev) => {
+      const panel = prev[id];
+      if (!panel) return prev;
+      const newIdxs = panel.results.map((r, i) => (!r.alreadyExists ? i : -1)).filter((i) => i >= 0);
+      const allSel = newIdxs.every((i) => panel.selected.has(i));
+      const sel = new Set(panel.selected);
+      if (allSel) newIdxs.forEach((i) => sel.delete(i));
+      else newIdxs.forEach((i) => sel.add(i));
+      return { ...prev, [id]: { ...panel, selected: sel } };
+    });
+  };
+
+  const commitScrape = async (id: string) => {
+    const panel = scrapePanel[id];
+    if (!panel || panel.selected.size === 0) return;
+    setCommitting(id);
+    try {
+      const toSave = Array.from(panel.selected).map((i) => panel.results[i]);
+      const res = await authFetch(`/api/admin/sources/${id}/scrape`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ results: toSave }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setScrapePanel((prev) => ({
+          ...prev,
+          [id]: { ...panel, results: [], selected: new Set(), committed: { inserted: data.inserted, skipped: data.skippedDuplicates } },
+        }));
+        setSources((prev) => prev.map((s) => s.id === id ? { ...s, grantsFound: (s.grantsFound || 0) + data.inserted, lastScrapedAt: new Date().toISOString() } : s));
+      } else {
+        setMsg({ type: "err", text: data.error || "Failed to save" });
+      }
+    } catch {
+      setMsg({ type: "err", text: "Network error" });
+    } finally {
+      setCommitting(null);
+    }
   };
 
   return (
@@ -258,6 +350,14 @@ export default function AdminSourcesPage() {
                     )}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
+                    {source.status === "learned" && (
+                      <button onClick={() => scrapeSource(source.id)} disabled={scraping === source.id}
+                        title="Scrape grants from this source"
+                        className="flex items-center gap-1.5 rounded-lg bg-green-50 px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-100 disabled:opacity-40">
+                        {scraping === source.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+                        Scrape
+                      </button>
+                    )}
                     <button onClick={() => crawlSource(source.id)} disabled={crawling === source.id}
                       title={source.status === "learned" ? "Re-learn site structure" : "Learn site structure"}
                       className="flex items-center gap-1.5 rounded-lg bg-brand-50 px-3 py-2 text-xs font-medium text-brand-700 hover:bg-brand-100 disabled:opacity-40">
@@ -280,6 +380,102 @@ export default function AdminSourcesPage() {
                     </button>
                   </div>
                 </div>
+
+                {/* Scraping in progress indicator */}
+                {scraping === source.id && (
+                  <div className="border-t border-gray-100 bg-green-50 px-4 py-3 flex items-center gap-2 text-sm text-green-700">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Searching for grants on {source.name}… this may take 30-60 seconds
+                  </div>
+                )}
+
+                {/* Scrape preview panel */}
+                {scrapePanel[source.id] && scraping !== source.id && (() => {
+                  const panel = scrapePanel[source.id];
+                  if (!panel) return null;
+                  const newIdxs = panel.results.map((r, i) => (!r.alreadyExists ? i : -1)).filter((i) => i >= 0);
+                  const allNewSelected = newIdxs.length > 0 && newIdxs.every((i) => panel.selected.has(i));
+
+                  if (panel.committed) {
+                    return (
+                      <div className="border-t border-gray-100 bg-green-50 p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-semibold text-green-700">✓ {panel.committed.inserted} grant{panel.committed.inserted !== 1 ? "s" : ""} added to the database</p>
+                            {panel.committed.skipped > 0 && <p className="text-xs text-green-600">{panel.committed.skipped} duplicate{panel.committed.skipped !== 1 ? "s" : ""} skipped</p>}
+                          </div>
+                          <div className="flex gap-2">
+                            <a href="/admin/grants" className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700">View in Grants →</a>
+                            <button onClick={() => setScrapePanel((prev) => { const n = { ...prev }; delete n[source.id]; return n; })}
+                              className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">Dismiss</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (panel.results.length === 0) return null;
+
+                  return (
+                    <div className="border-t border-gray-100 bg-gray-50 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-bold text-gray-800">{panel.results.length} result{panel.results.length !== 1 ? "s" : ""} found — select grants to import</p>
+                          {panel.searchQuery && <p className="text-[10px] text-gray-400 mt-0.5">Query: "{panel.searchQuery}"</p>}
+                          <p className="text-xs text-gray-500">{panel.selected.size} selected · {panel.results.filter(r => r.alreadyExists).length} already in DB</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => commitScrape(source.id)} disabled={committing === source.id || panel.selected.size === 0}
+                            className="flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
+                            {committing === source.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <DollarSign className="h-3.5 w-3.5" />}
+                            Add {panel.selected.size} Grant{panel.selected.size !== 1 ? "s" : ""}
+                          </button>
+                          <button onClick={() => setScrapePanel((prev) => { const n = { ...prev }; delete n[source.id]; return n; })}
+                            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-200"><X className="h-4 w-4" /></button>
+                        </div>
+                      </div>
+
+                      <label className="mb-2 flex cursor-pointer select-none items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2">
+                        <input type="checkbox" checked={allNewSelected} onChange={() => toggleScrapeSelectAll(source.id)}
+                          className="h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500" />
+                        <span className="text-xs text-gray-600">Select all new ({newIdxs.length})</span>
+                      </label>
+
+                      <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                        {panel.results.map((result, i) => (
+                          <div key={i} className={`flex items-start gap-2 rounded-lg border bg-white p-3 transition-colors ${
+                            result.alreadyExists ? "border-gray-100 opacity-50" :
+                            panel.selected.has(i) ? "border-brand-300 bg-brand-50/30" : "border-gray-200"
+                          }`}>
+                            <input type="checkbox" checked={panel.selected.has(i)} disabled={result.alreadyExists}
+                              onChange={() => toggleScrapeSelect(source.id, i)}
+                              className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-gray-300 text-brand-600 focus:ring-brand-500 disabled:opacity-40" />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-xs font-medium text-gray-900 leading-snug">{result.title}</p>
+                                <div className="flex shrink-0 items-center gap-1">
+                                  {result.alreadyExists && <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold text-gray-400">Exists</span>}
+                                  <a href={result.url} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-brand-600">
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                  </a>
+                                </div>
+                              </div>
+                              {result.description && <p className="mt-0.5 text-[10px] text-gray-500 line-clamp-2">{result.description}</p>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-3 flex justify-end">
+                        <button onClick={() => commitScrape(source.id)} disabled={committing === source.id || panel.selected.size === 0}
+                          className="flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
+                          {committing === source.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                          Add {panel.selected.size} Grant{panel.selected.size !== 1 ? "s" : ""} to Database
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Expanded site structure */}
                 {isExpanded && source.siteStructure && (() => {
