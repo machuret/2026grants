@@ -1,16 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Plus, Search, Loader2, ChevronDown, ChevronUp, Download, Clock, Trash2, CheckSquare } from "lucide-react";
 import { useGrants, type Grant } from "@/hooks/useGrants";
 import { exportToCsv } from "@/lib/exportCsv";
+import { authFetch } from "@/lib/authFetch";
 import { GrantRow } from "./components/GrantRow";
 import { AddGrantModal } from "./components/AddGrantModal";
+import type { MatchData } from "./components/MatchScoreBadge";
 
 export default function GrantsPage() {
   const { grants, loading, updateGrant: updateGrantRaw, deleteGrant, addGrant } = useGrants();
   const updateGrant = async (id: string, d: Partial<Grant>) => { return await updateGrantRaw(id, d); };
+  const [matches, setMatches] = useState<Record<string, MatchData>>({});
   const [showAdd, setShowAdd] = useState(false);
+
+  useEffect(() => {
+    authFetch("/api/company/matches")
+      .then(r => r.json())
+      .then(d => {
+        const idx: Record<string, MatchData> = {};
+        for (const m of d.matches ?? []) idx[m.publicGrantId] = m;
+        setMatches(idx);
+      })
+      .catch(() => {});
+  }, []);
   const [search, setSearch] = useState("");
   const [decisionFilter, setDecisionFilter] = useState("All");
   const [deadlineFilter, setDeadlineFilter] = useState<"all" | "7" | "14" | "30" | "expired">("all");
@@ -234,7 +248,8 @@ export default function GrantsPage() {
             <tbody>
               {filtered.slice((currentPage - 1) * perPage, currentPage * perPage).map((grant) => (
                 <GrantRow key={grant.id} grant={grant} onUpdate={updateGrant} onDelete={deleteGrant}
-                  selected={selected.has(grant.id)} onToggleSelect={() => toggleSelect(grant.id)} />
+                  selected={selected.has(grant.id)} onToggleSelect={() => toggleSelect(grant.id)}
+                  matchData={grant.publicGrantId ? matches[grant.publicGrantId] : undefined} />
               ))}
             </tbody>
           </table>

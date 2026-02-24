@@ -8,6 +8,7 @@ import {
 import type { Grant } from "@/hooks/useGrants";
 import { FitStars, DecisionBadge, EffortBadge, DeadlineBadge } from "./GrantBadges";
 import { GrantFormFields } from "./GrantFormFields";
+import { MatchBreakdown, MatchScorePill, type MatchData } from "./MatchScoreBadge";
 import type { Effort } from "./grantTypes";
 
 interface Props {
@@ -16,9 +17,10 @@ interface Props {
   onDelete: (id: string) => Promise<{ success: boolean }>;
   selected?: boolean;
   onToggleSelect?: () => void;
+  matchData?: MatchData;
 }
 
-export function GrantRow({ grant, onUpdate, onDelete, selected, onToggleSelect }: Props) {
+export function GrantRow({ grant, onUpdate, onDelete, selected, onToggleSelect, matchData }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState<Partial<Grant>>({ ...grant });
@@ -94,7 +96,9 @@ export function GrantRow({ grant, onUpdate, onDelete, selected, onToggleSelect }
         <td className="px-3 py-3 whitespace-nowrap"><DeadlineBadge date={grant.deadlineDate} /></td>
         <td className="px-3 py-3 text-sm text-gray-700 whitespace-nowrap">{grant.amount || <span className="text-gray-300">—</span>}</td>
         <td className="px-3 py-3">
-          {grant.matchScore != null ? (
+          {matchData ? (
+            <MatchScorePill score={matchData.overallScore} stale={matchData.stale} />
+          ) : grant.matchScore != null ? (
             <div className="flex items-center gap-1.5">
               <div className="h-1.5 w-16 rounded-full bg-gray-200">
                 <div className={`h-1.5 rounded-full ${grant.matchScore >= 70 ? "bg-green-500" : grant.matchScore >= 40 ? "bg-yellow-400" : "bg-red-400"}`} style={{ width: `${grant.matchScore}%` }} />
@@ -162,6 +166,16 @@ export function GrantRow({ grant, onUpdate, onDelete, selected, onToggleSelect }
                   {!grant.eligibility && !grant.howToApply && !grant.notes && (
                     <p className="text-sm text-gray-400">No details yet — click Edit to add information.</p>
                   )}
+                </div>
+                {/* AI Match Breakdown */}
+                <div className="lg:col-span-2">
+                  {matchData ? (
+                    <MatchBreakdown match={matchData} />
+                  ) : grant.publicGrantId ? (
+                    <p className="rounded-lg border border-dashed border-gray-200 px-3 py-2 text-xs text-gray-400">
+                      Match score pending — complete your <a href="/grants/profile" className="text-brand-600 hover:underline">Organisation Profile</a> to enable AI matching.
+                    </p>
+                  ) : null}
                 </div>
                 <div className="lg:col-span-2 flex items-center gap-4 flex-wrap">
                   <span className="text-xs text-gray-400">
