@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { Metadata } from "next";
 import { db } from "@/lib/db";
 import { toPathSegment } from "@/lib/slugify";
