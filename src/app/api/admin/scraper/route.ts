@@ -3,6 +3,46 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { requireAdminAuth, handleApiError } from "@/lib/apiHelpers";
 
+// PUT /api/admin/scraper — commit selected previewed results to DB
+export async function PUT(req: NextRequest) {
+  try {
+    const { response: authError } = await requireAdminAuth();
+    if (authError) return authError;
+
+    const { country, industry, results } = await req.json() as {
+      country: string;
+      industry?: string;
+      results: Array<{ title: string; url: string; description: string }>;
+    };
+
+    if (!Array.isArray(results) || results.length === 0) {
+      return NextResponse.json({ error: "No results provided" }, { status: 400 });
+    }
+
+    let inserted = 0;
+    for (const result of results) {
+      const { data: existing } = await db.from("PublicGrant").select("id").eq("url", result.url).maybeSingle();
+      if (existing) continue;
+      const { error } = await db.from("PublicGrant").insert({
+        name: result.title,
+        url: result.url,
+        description: result.description,
+        sourceUrl: result.url,
+        country,
+        industry: industry || null,
+        status: "scraped",
+        enriched: false,
+        scrapedRaw: result,
+      });
+      if (!error) inserted++;
+    }
+
+    return NextResponse.json({ success: true, inserted, skippedDuplicates: results.length - inserted });
+  } catch (err) {
+    return handleApiError(err, "Admin Scraper PUT");
+  }
+}
+
 // POST /api/admin/scraper — scrape grants via Apify by country + industry
 export async function POST(req: NextRequest) {
   try {
@@ -12,7 +52,7 @@ export async function POST(req: NextRequest) {
     const apiKey = process.env.APIFY_API_KEY;
     if (!apiKey) return NextResponse.json({ error: "Apify API key not configured" }, { status: 500 });
 
-    const { country, industry, maxResults = 20 } = await req.json();
+    const { country, industry, maxResults = 20, preview = false } = await req.json();
     if (!country) return NextResponse.json({ error: "country is required" }, { status: 400 });
 
     // Use Apify Google Search Scraper to find grants
@@ -56,6 +96,20 @@ export async function POST(req: NextRequest) {
       seen.add(r.url);
       return true;
     }).slice(0, maxResults);
+
+    // Preview mode: return results without saving
+    if (preview) {
+      // Mark which URLs already exist in DB
+      const urls = filtered.map((r) => r.url);
+      const { data: existing } = await db.from("PublicGrant").select("url").in("url", urls);
+      const existingUrls = new Set((existing ?? []).map((r: { url: string }) => r.url));
+      return NextResponse.json({
+        success: true,
+        preview: true,
+        query: searchQuery,
+        results: filtered.map((r) => ({ ...r, alreadyExists: existingUrls.has(r.url) })),
+      });
+    }
 
     // Save to PublicGrant table as 'scraped' status
     let inserted = 0;
